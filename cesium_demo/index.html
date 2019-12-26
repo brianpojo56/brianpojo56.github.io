@@ -9,6 +9,14 @@
   <div id="cesiumContainer" ></div>
   <div id="controls">
     <div class="row">
+      <div class="col-35">Lead Time:</div>
+      <div class="col-65"><input id="lead" type="range" min="0" max="300" value="0"></div>
+    </div>
+      <div class="row">
+      <div class="col-35">Linger Time:</div>
+      <div class="col-65"><input id="linger" type="range" min="0" max="300" value="300"></div>
+    </div>
+    <div class="row">
       <div class="col-35">Value Min:</div>
       <div class="col-65"><input id="vmin" type="range" min="-50" max="100" value="-10"></div>
     </div>
@@ -99,6 +107,8 @@
   <script>
   var epoch;
   var viewerTime = 0;
+  var lead = 0;
+  var linger = 300;
   var reverse = true;
   var ascale = 0.0;
   var vmin = -10;
@@ -107,6 +117,16 @@
   var hmin = 0.83;
   var hrange = 0.83;
   var scale = hrange / vrange;
+
+  document.getElementById("lead").oninput = async (e) => {
+    lead = e.target.valueAsNumber;
+    updateTimeWindow();
+  }
+
+  document.getElementById("linger").oninput = async (e) => {
+    linger = e.target.valueAsNumber;
+    updateTimeWindow();
+  }
 
   document.getElementById("vmin").oninput = async (e) => {
     vmin = e.target.valueAsNumber;
@@ -145,10 +165,15 @@
     update();
   }
 
+  var updateTimeWindow = async () => {
+    hiwrapTileset.style.show = getShowExpression();
+    hiwrapTileset.makeStyleDirty();
+  }
+
   var update = async () => {
     getColorMap();
-    test.style.color = getColorExpression();
-    test.makeStyleDirty();
+    hiwrapTileset.style.color = getColorExpression();
+    hiwrapTileset.makeStyleDirty();
   }
 
   var reset = () => {
@@ -172,7 +197,7 @@
   }
 
   var getShowExpression = () => {
-      return `\${time} <= ${viewerTime} && \${time} >= ${viewerTime - 300}`
+      return `\${time} <= ${viewerTime + lead} && \${time} >= ${viewerTime - linger}`
   }
 
   var getColorMap = async () => {
@@ -185,7 +210,10 @@
     document.getElementById("stripe").style.backgroundImage = `linear-gradient(${reverse ? `270`:`90`}deg,${gradient.join('')})`;
   }
     Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJhYjMyN2RmOS1kZDUyLTQ3NzAtODY1Yi1jN2VjZGM2MGMwNjAiLCJpZCI6NzEwMywic2NvcGVzIjpbImFzciIsImdjIl0sImlhdCI6MTU0ODI2NDIzNH0.6mNjeIHMcoOZOo8sb7WaApfsUKHmXx58TFLFZ5nrcVQ';
-    var viewer = new Cesium.Viewer('cesiumContainer', {shadows: false});
+    var viewer = new Cesium.Viewer('cesiumContainer', {
+      shadows: false,
+      automaticallyTrackDataSourceClocks: false
+    });
     viewer.clock.startTime = Cesium.JulianDate.fromIso8601("2015-12-03T14:00:00Z");
     viewer.clock.currentTime = Cesium.JulianDate.fromIso8601("2015-12-03T14:40:00Z");
     viewer.clock.stopTime = Cesium.JulianDate.fromIso8601("2015-12-03T17:50:00Z");
@@ -194,29 +222,45 @@
     viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
     var previousTime = Cesium.JulianDate.clone(viewer.clock.currentTime);
 
-    var test = new Cesium.Cesium3DTileset({
+    var hiwrapTileset = new Cesium.Cesium3DTileset({
       url: 'tile/tileset.json',
       maximumScreenSpaceError: 512,
       debugShowContentBoundingVolume: true
     });
-    test.readyPromise.then((tileset) => {
+    hiwrapTileset.readyPromise.then((tileset) => {
       epoch = Cesium.JulianDate.fromIso8601(tileset.properties.epoch);
-      test.style = new Cesium.Cesium3DTileStyle();
+      tileset.style = new Cesium.Cesium3DTileStyle();
       reset();
-      test.style.color = getColorExpression();
-      test.style.show = getShowExpression(viewerTime);
-      test.makeStyleDirty();
-      viewer.clock.onTick.addEventListener((e)=> {
-       if (!Cesium.JulianDate.equalsEpsilon(previousTime, viewer.clock.currentTime, 1)) {
-         previousTime = Cesium.JulianDate.clone(viewer.clock.currentTime);
-         viewerTime = Cesium.JulianDate.secondsDifference(previousTime, epoch);
-         test.style.show = getShowExpression();
-         test.makeStyleDirty();
-       }
-      })
+      tileset.style.color = getColorExpression();
+      tileset.style.show = getShowExpression(viewerTime);
+      tileset.makeStyleDirty();
+      viewer.clock.onTick.addEventListener((e) => {
+        if (!Cesium.JulianDate.equalsEpsilon(previousTime, viewer.clock.currentTime, 1)) {
+          previousTime = Cesium.JulianDate.clone(viewer.clock.currentTime);
+          viewerTime = Cesium.JulianDate.secondsDifference(previousTime, epoch);
+          tileset.style.show = getShowExpression();
+          tileset.makeStyleDirty();
+        }
+      });
     });
-    viewer.scene.primitives.add(test);
-    viewer.zoomTo(test);
+    var flightTrackCzml = Cesium.CzmlDataSource.load('czml/er2.czml').then((ds) => {
+      modelRef = ds.entities.getById('nasa_er2');
+      modelRef.orientation = new Cesium.CallbackProperty((time, result) => {
+        let position = modelRef.position.getValue(time);
+        let att = modelRef.properties.attitude.getValue(time);
+        let hpr = Cesium.HeadingPitchRoll.fromDegrees(att.x, att.y, att.z);
+        return Cesium.Transforms.headingPitchRollQuaternion(position, hpr);
+      }, false);
+      viewer.dataSources.add(ds);
+    });
+
+    viewer.scene.primitives.add(hiwrapTileset);
+    viewer.zoomTo(hiwrapTileset);
+    var credit = new Cesium.Credit(`<div>Heymsfield, Gerald M and Lin Tian. 2017.</div>
+                                    <div>GPM Ground Validation High Altitude Imaging Wind and Rain Airborne Profiler (HIWRAP) OLYMPEX</div>
+                                    <div>Shown data is ku band from flight on 2015-12-03.</div>
+                                    <div>Dataset available online from the NASA Global Hydrology Resource Center DAAC, Huntsville, Alabama, U.S.A.</div>
+                                    <div>DOI: <a href="http://dx.doi.org/10.5067/GPMGV/OLYMPEX/HIWRAP/DATA101">http://dx.doi.org/10.5067/GPMGV/OLYMPEX/HIWRAP/DATA101</a></div>`, true);
   </script>
 </body>
 </html>
